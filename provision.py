@@ -57,6 +57,15 @@ HETZNER_KEY_NAME = "container-seminar-provisioner"
 FW_NAME          = "container-seminar-fw"
 PASSWORDS_FILE   = Path(__file__).parent / ".passwords.json"
 
+# ── Harbor registry — one shared instance for the instructor + all students ──
+HARBOR_SLUG         = "harbor"
+HARBOR_SERVER_TYPE  = "cx33"                      # 4 vCPU / 8 GB RAM (Intel) — Harbor's recommended minimum
+HARBOR_HOSTNAME     = f"{HARBOR_SLUG}.{DOMAIN_SUFFIX}"
+HARBOR_HTTP_PORT    = 8081                        # Harbor's internal proxy port; Caddy terminates TLS in front of it
+HARBOR_PROJECT      = "seminar"
+HARBOR_ROBOT_NAME   = "students"                  # full robot account name becomes robot$students
+HARBOR_SECRETS_FILE = Path(__file__).parent / ".harbor-passwords.json"
+
 # slug   : used for the Hetzner VM name and DNS subdomain (ASCII, no umlauts)
 # display: shown in the summary / credentials file
 STUDENTS = [
@@ -155,6 +164,24 @@ def load_or_generate_passwords() -> dict[str, str]:
     return passwords
 
 
+def load_or_generate_harbor_secrets() -> dict[str, str]:
+    """Load persisted Harbor admin/DB passwords from disk; generate once and reuse.
+
+    Re-running the provisioner must NOT regenerate these, otherwise the admin
+    login used in harbor.yml on first boot would no longer match what's on disk.
+    """
+    if HARBOR_SECRETS_FILE.exists():
+        log(f"Loaded Harbor secrets from {HARBOR_SECRETS_FILE}")
+        return json.loads(HARBOR_SECRETS_FILE.read_text())
+    secrets = {
+        "admin_password": gen_password(),
+        "db_password": gen_password(),
+    }
+    HARBOR_SECRETS_FILE.write_text(json.dumps(secrets, indent=2))
+    log(f"Generated and saved Harbor secrets to {HARBOR_SECRETS_FILE}")
+    return secrets
+
+
 def connection(ip: str, user: str = "root") -> Connection:
     """Return a Fabric Connection for the given IP, forced over IPv4."""
     import socket as _socket
@@ -239,14 +266,14 @@ def ensure_firewall() -> object:
     return result.firewall
 
 
-def create_vm(name: str, ssh_key: object) -> tuple[str, str]:
+def create_vm(name: str, ssh_key: object, server_type: str = SERVER_TYPE) -> tuple[str, str]:
     """Create a single VM; return (name, public_ipv4)."""
     existing = hc.servers.get_by_name(name)
     if existing:
         ip = existing.public_net.ipv4.ip
         log(f"  VM '{name}' already exists (IP: {ip}), skipping.")
         return name, ip
-    log(f"  Creating VM '{name}' ({SERVER_TYPE}, {IMAGE_NAME}, {LOCATION_NAME}) ...")
+    log(f"  Creating VM '{name}' ({server_type}, {IMAGE_NAME}, {LOCATION_NAME}) ...")
     from hcloud._exceptions import APIException
 
     # Each location gets a couple of tries before moving on to the next one;
@@ -262,7 +289,7 @@ def create_vm(name: str, ssh_key: object) -> tuple[str, str]:
                 try:
                     response = hc.servers.create(
                         name=name,
-                        server_type=ServerType(name=SERVER_TYPE),
+                        server_type=ServerType(name=server_type),
                         image=Image(name=IMAGE_NAME),
                         location=Location(name=location_name),
                         ssh_keys=[ssh_key],
@@ -539,6 +566,96 @@ apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq trivy
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Harbor registry — Docker Compose install + shared project/robot account
+#
+# Harbor is installed with its official Docker Compose installer (the
+# supported, simplest path — no Kubernetes cluster required). TLS is
+# terminated by Caddy exactly like the code-server VMs, so harbor.yml's own
+# https block is disabled and Harbor's internal proxy just listens on
+# HARBOR_HTTP_PORT (loopback only, hardened the same way code-server binds
+# to 127.0.0.1). Placeholders (@@...@@) are substituted via str.replace()
+# rather than str.format()/f-strings because these scripts are full of
+# literal '{' '}' (curl -w, JSON bodies) that would otherwise need escaping.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HARBOR_INSTALL_TEMPLATE = r"""
+set -e
+if [ ! -d /opt/harbor ]; then
+  TAG=$(curl -fsSL https://api.github.com/repos/goharbor/harbor/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  echo "Installing Harbor ${TAG} ..."
+  curl -fsSL "https://github.com/goharbor/harbor/releases/download/${TAG}/harbor-online-installer-${TAG}.tgz" -o /tmp/harbor.tgz
+  tar xzf /tmp/harbor.tgz -C /opt
+fi
+cd /opt/harbor
+cp -n harbor.yml.tmpl harbor.yml
+sed -i \
+  -e 's/^hostname: .*/hostname: @@HOSTNAME@@/' \
+  -e 's/^  port: 80$/  port: @@HTTP_PORT@@/' \
+  -e '/^https:$/s/^/#/' \
+  -e '/^  port: 443$/s/^/#/' \
+  -e '/^  certificate: /s/^/#/' \
+  -e '/^  private_key: /s/^/#/' \
+  -e 's/^harbor_admin_password: .*/harbor_admin_password: @@ADMIN_PASSWORD@@/' \
+  -e 's/^  password: root123$/  password: @@DB_PASSWORD@@/' \
+  harbor.yml
+./install.sh --with-trivy
+# Defense in depth: bind Harbor's internal proxy to loopback only, same as
+# code-server's 127.0.0.1 bind. The Hetzner firewall already blocks this
+# port publicly, so failures here (format drift between Harbor releases)
+# are non-fatal.
+sed -i "s/'@@HTTP_PORT@@:8080'/'127.0.0.1:@@HTTP_PORT@@:8080'/" docker-compose.yml || true
+sed -i "s/- @@HTTP_PORT@@:8080$/- 127.0.0.1:@@HTTP_PORT@@:8080/" docker-compose.yml || true
+docker compose up -d
+"""
+
+_HARBOR_CONFIGURE_TEMPLATE = r"""
+set -e
+apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq >/dev/null
+BASE="http://127.0.0.1:@@HTTP_PORT@@/api/v2.0"
+AUTH="admin:@@ADMIN_PASSWORD@@"
+
+echo "Waiting for Harbor API to become healthy ..."
+for i in $(seq 1 60); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health") || code=000
+  [ "$code" = "200" ] && break
+  sleep 5
+done
+
+# Create the shared project (409 if it already exists — that's fine)
+curl -s -o /dev/null -u "$AUTH" -X POST "$BASE/projects" \
+  -H 'Content-Type: application/json' \
+  -d '{"project_name":"@@PROJECT@@","metadata":{"public":"false"}}'
+
+# Recreate the robot account so we always know its secret (Harbor only
+# reveals a robot secret once, at creation time).
+ROBOT_ID=$(curl -s -u "$AUTH" "$BASE/robots?q=name%3D@@ROBOT_NAME@@" | jq -r '.[0].id // empty')
+if [ -n "$ROBOT_ID" ]; then
+  curl -s -o /dev/null -X DELETE -u "$AUTH" "$BASE/robots/$ROBOT_ID"
+fi
+
+curl -s -u "$AUTH" -X POST "$BASE/robots" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "name": "@@ROBOT_NAME@@",
+        "duration": -1,
+        "level": "project",
+        "permissions": [
+          {
+            "kind": "project",
+            "namespace": "@@PROJECT@@",
+            "access": [
+              {"resource": "repository", "action": "push"},
+              {"resource": "repository", "action": "pull"},
+              {"resource": "tag", "action": "create"},
+              {"resource": "artifact", "action": "read"},
+              {"resource": "artifact", "action": "list"}
+            ]
+          }
+        ]
+      }' > /root/harbor-robot.json
+"""
+
 
 def configure_vm(ip: str, slug: str, password: str) -> None:
     """
@@ -680,6 +797,152 @@ def print_summary(vm_ips: dict[str, str], passwords: dict[str, str]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 6/7 — Harbor Registry (dedicated VM, Docker Compose install)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def install_harbor(ip: str, secrets: dict[str, str]) -> None:
+    """Install Docker, Caddy, and Harbor itself on the Harbor VM."""
+    caddyfile = (
+        f"{HARBOR_HOSTNAME} {{\n"
+        f"    reverse_proxy 127.0.0.1:{HARBOR_HTTP_PORT}\n"
+        f"    log {{\n"
+        f"        output file /var/log/caddy/access.log\n"
+        f"    }}\n"
+        f"}}\n"
+    )
+    install_script = (
+        _HARBOR_INSTALL_TEMPLATE
+        .replace("@@HOSTNAME@@", HARBOR_HOSTNAME)
+        .replace("@@HTTP_PORT@@", str(HARBOR_HTTP_PORT))
+        .replace("@@ADMIN_PASSWORD@@", secrets["admin_password"])
+        .replace("@@DB_PASSWORD@@", secrets["db_password"])
+    )
+
+    with connection(ip) as c:
+        log(f"  [{HARBOR_SLUG}] Installing Docker Engine + Compose v2 ...")
+        c.run(_DOCKER_INSTALL, hide=True)
+
+        log(f"  [{HARBOR_SLUG}] Installing Caddy ...")
+        c.run(_CADDY_INSTALL, hide=True)
+        c.run("mkdir -p /var/log/caddy", hide=True)
+        put_text(c, caddyfile, "/etc/caddy/Caddyfile")
+        c.run("systemctl enable caddy && systemctl restart caddy", hide=True)
+
+        log(f"  [{HARBOR_SLUG}] Installing Harbor (this can take a few minutes) ...")
+        c.run(install_script, hide=True)
+
+    log(f"  [{HARBOR_SLUG}] Harbor installed.")
+
+
+def configure_harbor(ip: str, secrets: dict[str, str]) -> dict[str, str]:
+    """Create the shared project + a push/pull robot account for students."""
+    log(f"  [{HARBOR_SLUG}] Creating project '{HARBOR_PROJECT}' and robot account ...")
+    configure_script = (
+        _HARBOR_CONFIGURE_TEMPLATE
+        .replace("@@HTTP_PORT@@", str(HARBOR_HTTP_PORT))
+        .replace("@@ADMIN_PASSWORD@@", secrets["admin_password"])
+        .replace("@@PROJECT@@", HARBOR_PROJECT)
+        .replace("@@ROBOT_NAME@@", HARBOR_ROBOT_NAME)
+    )
+    local_path = Path(__file__).parent / ".harbor-robot.json"
+    with connection(ip) as c:
+        c.run(configure_script, hide=True)
+        c.get("/root/harbor-robot.json", str(local_path))
+    robot = json.loads(local_path.read_text())
+    local_path.unlink()
+    return {"name": robot["name"], "secret": robot["secret"]}
+
+
+def print_harbor_summary(ip: str, secrets: dict[str, str], robot: dict[str, str]) -> None:
+    sep = "=" * 72
+    print(f"\n{sep}")
+    print("  HARBOR REGISTRY READY")
+    print(sep)
+    print(f"\n  URL           : https://{HARBOR_HOSTNAME}")
+    print(f"  VM            : {HARBOR_SLUG}  ({ip})")
+    print(f"  Admin login   : admin / {secrets['admin_password']}")
+    print(f"  Project       : {HARBOR_PROJECT}")
+    print(f"  Robot account : {robot['name']}")
+    print(f"  Robot secret  : {robot['secret']}")
+    print(sep)
+
+    md_path = Path(__file__).parent / "harbor-credentials.md"
+    md_path.write_text(
+        "# Harbor Registry — Credentials\n\n"
+        f"URL: https://{HARBOR_HOSTNAME}\n\n"
+        "## Instructor (admin)\n\n"
+        "- Username: `admin`\n"
+        f"- Password: `{secrets['admin_password']}`\n\n"
+        "## Students (shared push/pull robot account)\n\n"
+        f"- Project: `{HARBOR_PROJECT}`\n"
+        f"- Username: `{robot['name']}`\n"
+        f"- Password: `{robot['secret']}`\n\n"
+        "### Usage on any student VM\n\n"
+        "```bash\n"
+        f"docker login {HARBOR_HOSTNAME}\n"
+        f"# username: {robot['name']}\n"
+        "# password: <the robot secret above>\n\n"
+        f"docker tag exercise-2 {HARBOR_HOSTNAME}/{HARBOR_PROJECT}/exercise-2:latest\n"
+        f"docker push {HARBOR_HOSTNAME}/{HARBOR_PROJECT}/exercise-2:latest\n"
+        "```\n"
+    )
+    print(f"\n  Credentials written to: {md_path}")
+
+
+def provision_harbor() -> None:
+    """Phase 6/7: dedicated VM + Docker/Caddy/Harbor + shared project/robot account."""
+    log("=== Phase 6: Harbor Infrastructure ===")
+    ssh_key = ensure_hetzner_ssh_key()
+    name, ip = create_vm(HARBOR_SLUG, ssh_key, server_type=HARBOR_SERVER_TYPE)
+
+    fw = hc.firewalls.get_by_name(FW_NAME)
+    server = hc.servers.get_by_name(name)
+    try:
+        hc.firewalls.apply_to_resources(
+            firewall=fw,
+            resources=[FirewallResource(type=FirewallResource.TYPE_SERVER, server=server)],
+        )
+        log(f"  Firewall applied to '{name}'.")
+    except Exception as e:
+        if "firewall_already_applied" in str(e):
+            log(f"  Firewall already applied to '{name}', skipping.")
+        else:
+            log(f"  Warning: could not apply firewall to '{name}': {e}")
+
+    all_records = list(cf.dns.records.list(zone_id=CF_ZONE_ID))
+    existing = [
+        r for r in all_records
+        if getattr(r, "name", "") == HARBOR_HOSTNAME and getattr(r, "type", "") == "A"
+    ]
+    if existing and getattr(existing[0], "content", "") == ip:
+        log(f"  DNS {HARBOR_HOSTNAME} -> {ip} already correct, skipping.")
+    elif existing:
+        log(f"  Updating DNS {HARBOR_HOSTNAME} -> {ip} ...")
+        cf.dns.records.update(
+            dns_record_id=existing[0].id, zone_id=CF_ZONE_ID,
+            name=HARBOR_HOSTNAME, type="A", content=ip, proxied=False, ttl=300,
+        )
+    else:
+        log(f"  Creating DNS {HARBOR_HOSTNAME} -> {ip} ...")
+        cf.dns.records.create(
+            zone_id=CF_ZONE_ID, name=HARBOR_HOSTNAME, type="A",
+            content=ip, proxied=False, ttl=300,
+        )
+
+    wait_for_ssh(ip)
+    configure_base_vm(HARBOR_SLUG, ip)
+    log("Phase 6 complete.\n")
+
+    log("=== Phase 7: Harbor Install + Configuration ===")
+    secrets = load_or_generate_harbor_secrets()
+    install_harbor(ip, secrets)
+    robot = configure_harbor(ip, secrets)
+    print_harbor_summary(ip, secrets, robot)
+    log("Phase 7 complete.\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -696,6 +959,8 @@ def main() -> None:
 
     passwords = configure_all_vms(vm_ips)
     print_summary(vm_ips, passwords)
+
+    provision_harbor()
 
 
 if __name__ == "__main__":

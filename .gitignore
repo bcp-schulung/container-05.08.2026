@@ -2,7 +2,9 @@
 .env
 .passwords.json
 .harbor-passwords.json
+.harbor-robot.json
 container-seminar-credentials.md
+harbor-credentials.md
 provision.log
 student-credentials/
 *.kubeconfig
