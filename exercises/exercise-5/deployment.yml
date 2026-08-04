@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ben-coeppicus
+  name: ben-coeppicus
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ben-coeppicus
+  template:
+    metadata:
+      labels:
+        app: ben-coeppicus
+    spec:
+      containers:
+      - image: harbor.container.it-scholar.com/seminar/ben-coeppicus:v2
+        name: ben-coeppicus
