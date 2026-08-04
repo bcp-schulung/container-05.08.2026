@@ -47,3 +47,10 @@ kubectl logs -l app=ben-coeppicus --prefix
 
 kubectl delete service ben-coeppicus
 kubectl delete deployment ben-coeppicus
+
+
+kubectl apply -f deployment.yml
+kubectl get deployments
+kubectl get pods -o wide
+kubectl apply -f service.yml
+kubectl get service ben-coeppicus
