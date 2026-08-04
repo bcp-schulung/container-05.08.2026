@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: ben-coeppicus
+  name: ben-coeppicus-html
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>Hello from ConfigMap</title>
+    </head>
+    <body>
+      <h1>Hello, World! (served from a ConfigMap volume mount)</h1>
+    </body>
+    </html>
