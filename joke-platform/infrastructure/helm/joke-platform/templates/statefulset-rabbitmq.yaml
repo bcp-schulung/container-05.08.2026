@@ -1,0 +1,122 @@
+{{- if .Values.rabbitmq.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  type: ClusterIP
+  ports:
+  - port: {{ .Values.rabbitmq.service.amqpPort }}
+    targetPort: amqp
+    protocol: TCP
+    name: amqp
+  - port: {{ .Values.rabbitmq.service.managementPort }}
+    targetPort: management
+    protocol: TCP
+    name: management
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: messaging
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: joke-platform
+    app.kubernetes.io/version: {{ .Values.rabbitmq.image.tag | quote }}
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/component: messaging
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/component: messaging
+        app.kubernetes.io/part-of: joke-platform
+        app.kubernetes.io/version: {{ .Values.rabbitmq.image.tag | quote }}
+    spec:
+      containers:
+      - name: rabbitmq
+        image: "{{ .Values.rabbitmq.image.repository }}:{{ .Values.rabbitmq.image.tag }}"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: amqp
+          containerPort: {{ .Values.rabbitmq.service.amqpPort }}
+          protocol: TCP
+        - name: management
+          containerPort: {{ .Values.rabbitmq.service.managementPort }}
+          protocol: TCP
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.rabbitmq.auth.existingSecret | default "rabbitmq-credentials" }}
+              key: username
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.rabbitmq.auth.existingSecret | default "rabbitmq-credentials" }}
+              key: password
+        - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+          value: "-rabbit log_levels [{connection,error},{default,warning}]"
+        resources:
+          {{- toYaml .Values.rabbitmq.resources | nindent 10 }}
+        startupProbe:
+          exec:
+            command:
+            - rabbitmq-diagnostics
+            - -q
+            - check_running
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 10
+          failureThreshold: 30
+        livenessProbe:
+          tcpSocket:
+            port: amqp
+          initialDelaySeconds: 0
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+            - rabbitmq-diagnostics
+            - -q
+            - check_running
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 6
+        volumeMounts:
+        - name: rabbitmq-data
+          mountPath: /var/lib/rabbitmq
+  volumeClaimTemplates:
+  - metadata:
+      name: rabbitmq-data
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/component: messaging
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      {{- if .Values.rabbitmq.persistence.storageClass }}
+      storageClassName: {{ .Values.rabbitmq.persistence.storageClass | quote }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.rabbitmq.persistence.size }}
+{{- end }}

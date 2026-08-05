@@ -7,12 +7,17 @@ global:
   namespace: joke-platform
   imageRegistry: harbor.container.it-scholar.com
   imagePullPolicy: IfNotPresent
-  
+
+# Namespace management
+namespace:
+  create: true
+
 # Service-specific configurations
 services:
   jokeGateway:
     enabled: true
     name: joke-gateway
+    component: gateway
     replicaCount: 2
     image:
       repository: joke-platform/joke-gateway
@@ -172,6 +177,9 @@ redis:
   config:
     maxmemory: "256mb"
     maxmemoryPolicy: "allkeys-lru"
+  auth:
+    password: redis-platform-secret
+    existingSecret: ""
 
 # RabbitMQ configuration
 rabbitmq:
@@ -209,7 +217,9 @@ cnpg:
   bootstrap:
     database: joke-platform
     owner: jokes
+    password: jokes-platform-secret
     existingSecret: postgres-credentials
+    createSecret: true
   persistence:
     enabled: true
     size: 10Gi
@@ -224,16 +234,25 @@ cnpg:
   affinity:
     enablePodAntiAffinity: false
 
-# Ingress configuration
+# Ingress configuration (uses the Gateway API, since the cluster's Cilium
+# install is configured as a Gateway controller rather than a classic Ingress
+# controller)
 ingress:
   enabled: true
-  className: cilium
+  gatewayClassName: cilium
   hostname: jokes.container.it-scholar.com
+  # The cluster's Cilium install has enable-gateway-api-proxy-protocol=true,
+  # so the Hetzner LB backing the Gateway must be told to speak PROXY protocol.
+  proxyProtocol: true
   tls:
     enabled: true
     secretName: joke-platform-tls
-    issuerName: letsencrypt-prod
+    issuerName: joke-platform-selfsigned
     issuerKind: ClusterIssuer
+    # Creates a self-signed ClusterIssuer so TLS works out of the box without
+    # requiring a pre-existing ACME/letsencrypt ClusterIssuer. Set to false and
+    # point issuerName/issuerKind at your own issuer if you have one.
+    createSelfSignedIssuer: true
 
 # Network Policy
 networkPolicy:

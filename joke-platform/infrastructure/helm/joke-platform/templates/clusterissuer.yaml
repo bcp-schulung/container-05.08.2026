@@ -1,0 +1,11 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.enabled .Values.ingress.tls.createSelfSignedIssuer }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.ingress.tls.issuerName }}
+  labels:
+    app.kubernetes.io/name: joke-platform
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  selfSigned: {}
+{{- end }}

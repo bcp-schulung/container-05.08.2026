@@ -1,0 +1,20 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $ctx := . }}
+{{- range $key, $svc := .Values.services }}
+{{- if and $svc.enabled (gt (int $svc.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ $ctx.Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $ctx) | nindent 4 }}
+spec:
+  minAvailable: {{ $ctx.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "joke-platform.serviceSelectorLabels" (list $svc) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

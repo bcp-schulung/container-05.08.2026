@@ -1,0 +1,17 @@
+{{- if .Values.services.punchlineService.enabled }}
+{{- $svc := .Values.services.punchlineService }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $svc.name }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $) | nindent 4 }}
+data:
+  SERVER_PORT: {{ $svc.service.port | quote }}
+  DB_HOST: {{ $svc.config.dbHost | quote }}
+  DB_PORT: {{ $svc.config.dbPort | quote }}
+  DB_NAME: {{ $svc.config.dbName | quote }}
+  DB_USERNAME: {{ $svc.config.dbUsername | quote }}
+  PUNCHLINE_REPOSITORY_PROVIDER: {{ $svc.config.repositoryProvider | quote }}
+{{- end }}

@@ -1,0 +1,12 @@
+{{- if .Values.services.chaosComedian.enabled }}
+{{- $svc := .Values.services.chaosComedian }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $svc.name }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $) | nindent 4 }}
+data:
+  SERVER_PORT: {{ $svc.service.port | quote }}
+{{- end }}

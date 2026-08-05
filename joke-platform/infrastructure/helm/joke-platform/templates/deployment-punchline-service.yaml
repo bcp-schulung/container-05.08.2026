@@ -1,0 +1,66 @@
+{{- if .Values.services.punchlineService.enabled }}
+{{- $svc := .Values.services.punchlineService }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $) | nindent 4 }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+spec:
+  replicas: {{ $svc.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "joke-platform.serviceSelectorLabels" (list $svc) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "joke-platform.serviceLabels" (list $svc $) | nindent 8 }}
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      containers:
+      - name: {{ $svc.name }}
+        image: {{ include "joke-platform.image" (list $svc $) }}
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: {{ $svc.service.port }}
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: {{ $svc.name }}-config
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ $svc.config.dbExistingSecret }}
+              key: password
+        resources:
+          {{- toYaml $svc.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 10"]
+      terminationGracePeriodSeconds: 30
+{{- end }}

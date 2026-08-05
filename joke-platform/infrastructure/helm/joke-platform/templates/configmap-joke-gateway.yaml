@@ -1,0 +1,19 @@
+{{- if .Values.services.jokeGateway.enabled }}
+{{- $gw := .Values.services.jokeGateway }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $gw.name }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $gw $) | nindent 4 }}
+data:
+  SERVER_PORT: {{ $gw.service.port | quote }}
+  THYMELEAF_CACHE: {{ $gw.config.thymeleafCache | quote }}
+  JOKE_GENERATOR_URL: "http://{{ .Values.services.jokeGenerator.name }}:{{ .Values.services.jokeGenerator.service.port }}"
+  PUNCHLINE_SERVICE_URL: "http://{{ .Values.services.punchlineService.name }}:{{ .Values.services.punchlineService.service.port }}"
+  AUDIENCE_SERVICE_URL: "http://{{ .Values.services.audienceService.name }}:{{ .Values.services.audienceService.service.port }}"
+  CHAOS_COMEDIAN_URL: "http://{{ .Values.services.chaosComedian.name }}:{{ .Values.services.chaosComedian.service.port }}"
+  BACKEND_CONNECT_TIMEOUT_MS: {{ $gw.config.backendConnectTimeoutMs | quote }}
+  BACKEND_READ_TIMEOUT_MS: {{ $gw.config.backendReadTimeoutMs | quote }}
+{{- end }}

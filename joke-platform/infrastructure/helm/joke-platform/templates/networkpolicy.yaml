@@ -1,0 +1,188 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.services.jokeGateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: joke-gateway-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: joke-gateway
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: joke-gateway
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  ingress:
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.services.jokeGateway.service.port }}
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow backend services
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: backend
+    ports:
+    - protocol: TCP
+      port: {{ .Values.services.jokeGenerator.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.punchlineService.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.audienceService.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.chaosComedian.service.port }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-services-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: backend
+  policyTypes:
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  ingress:
+  # Allow from gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: joke-gateway
+    ports:
+    - protocol: TCP
+      port: {{ .Values.services.jokeGenerator.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.punchlineService.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.audienceService.service.port }}
+    - protocol: TCP
+      port: {{ .Values.services.chaosComedian.service.port }}
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow Redis (only for audience-service)
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: {{ .Values.redis.service.port }}
+  # Allow RabbitMQ (only for audience-service)
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: rabbitmq
+    ports:
+    - protocol: TCP
+      port: {{ .Values.rabbitmq.service.amqpPort }}
+  # Allow PostgreSQL (CloudNativePG)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.global.namespace }}
+    ports:
+    - protocol: TCP
+      port: 5432
+{{- if .Values.redis.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: datastore
+  policyTypes:
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  ingress:
+  # Allow only from audience-service
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: audience-service
+    ports:
+    - protocol: TCP
+      port: {{ .Values.redis.service.port }}
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+{{- end }}
+{{- if .Values.rabbitmq.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: joke-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/component: messaging
+  policyTypes:
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  ingress:
+  # Allow only from audience-service
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: audience-service
+    ports:
+    - protocol: TCP
+      port: {{ .Values.rabbitmq.service.amqpPort }}
+  # Allow management UI access from anywhere in cluster
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.rabbitmq.service.managementPort }}
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+{{- end }}
+{{- end }}

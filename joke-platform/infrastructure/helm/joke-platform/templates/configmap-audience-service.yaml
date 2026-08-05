@@ -1,0 +1,26 @@
+{{- if .Values.services.audienceService.enabled }}
+{{- $svc := .Values.services.audienceService }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $svc.name }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $) | nindent 4 }}
+data:
+  SERVER_PORT: {{ $svc.service.port | quote }}
+  REDIS_HOST: redis
+  REDIS_PORT: {{ .Values.redis.service.port | quote }}
+  REDIS_CONNECT_TIMEOUT: "2s"
+  REDIS_TIMEOUT: "2s"
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: {{ .Values.rabbitmq.service.amqpPort | quote }}
+  RABBITMQ_CONNECTION_TIMEOUT: "2s"
+  AUDIENCE_STATISTICS_PROVIDER: {{ $svc.config.statisticsProvider | quote }}
+  AUDIENCE_EVENTS_ENABLED: {{ $svc.config.eventsEnabled | quote }}
+  AUDIENCE_REDIS_HEALTH_ENABLED: {{ $svc.config.redisHealthEnabled | quote }}
+  DB_HOST: {{ $svc.config.dbHost | quote }}
+  DB_PORT: {{ $svc.config.dbPort | quote }}
+  DB_NAME: {{ $svc.config.dbName | quote }}
+  DB_USERNAME: {{ $svc.config.dbUsername | quote }}
+{{- end }}

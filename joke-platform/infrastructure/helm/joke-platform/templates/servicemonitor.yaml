@@ -1,0 +1,28 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+{{- $ctx := . }}
+{{- range $key, $svc := .Values.services }}
+{{- if $svc.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ $ctx.Values.global.namespace }}
+  labels:
+    {{- include "joke-platform.serviceLabels" (list $svc $ctx) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "joke-platform.serviceSelectorLabels" (list $svc) | nindent 6 }}
+  endpoints:
+  - port: http
+    path: {{ $ctx.Values.monitoring.serviceMonitor.path }}
+    interval: {{ $ctx.Values.monitoring.serviceMonitor.interval }}
+  namespaceSelector:
+    matchNames:
+    - {{ $ctx.Values.global.namespace }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
