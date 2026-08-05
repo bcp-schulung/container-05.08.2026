@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namePrefix: prod-
+
+bases:
+  - ../../base
+
+resources:
+  - hpa-joke-gateway.yaml
+  - hpa-joke-generator.yaml
+  - hpa-punchline-service.yaml
+  - hpa-audience-service.yaml
+  - ingress.yaml
+
+patchesStrategicMerge:
+  - deployment-replicas.yaml
+  - configmap-db-host.yaml
+  - configmap-gateway-urls.yaml
+  - cnpg-cluster.yaml
+  - service-joke-gateway-nodeport.yaml
+
+configMapGenerator:
+  - name: environment-config
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+
+images:
+  - name: harbor.container.it-scholar.com/joke-platform/joke-gateway
+    newTag: latest
+  - name: harbor.container.it-scholar.com/joke-platform/joke-generator
+    newTag: latest
+  - name: harbor.container.it-scholar.com/joke-platform/punchline-service
+    newTag: latest
+  - name: harbor.container.it-scholar.com/joke-platform/audience-service
+    newTag: latest
+  - name: harbor.container.it-scholar.com/joke-platform/chaos-comedian
+    newTag: latest

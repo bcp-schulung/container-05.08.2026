@@ -685,7 +685,13 @@ def configure_vm(ip: str, slug: str, password: str) -> None:
         c.run("curl -fsSL https://code-server.dev/install.sh | sh", hide=True)
 
         log(f"  [{slug}] Configuring code-server ...")
+        # NOTE: 'install -d' only chowns the leaf directory it creates, not
+        # any missing parent directories (those are created root-owned).
+        # Explicitly fix ownership of the parent '.config' dir too, or tools
+        # like Helm later fail with "mkdir /home/student/.config/helm:
+        # permission denied" since student can't write into a root-owned dir.
         c.run(
+            "install -d -m 755 -o student -g student /home/student/.config && "
             "install -d -m 755 -o student -g student "
             "/home/student/.config/code-server",
             hide=True,
