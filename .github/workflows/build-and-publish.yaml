@@ -10,8 +10,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  REGISTRY: ${{ vars.HARBOR_REGISTRY || 'harbor.container.it-scholar.com' }}
-  REGISTRY_PROJECT: joke-platform
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-push:
@@ -19,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -36,12 +36,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Harbor registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute lowercase repository path
+        id: repo
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -51,6 +55,6 @@ jobs:
           build-args: |
             MODULE=${{ matrix.service }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ matrix.service }}:latest
+          tags: ${{ env.REGISTRY }}/${{ steps.repo.outputs.name }}/${{ matrix.service }}:latest
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
