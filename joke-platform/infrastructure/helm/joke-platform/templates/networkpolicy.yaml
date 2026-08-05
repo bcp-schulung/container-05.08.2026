@@ -18,6 +18,12 @@ spec:
   ingress:
   - from:
     - namespaceSelector: {}
+    # Also allow traffic that reaches the pod without a cluster identity
+    # (e.g. external clients via the NodePort/LoadBalancer, or an ingress
+    # controller), which Cilium treats as "world" and would otherwise be
+    # dropped since it doesn't match namespaceSelector: {}.
+    - ipBlock:
+        cidr: 0.0.0.0/0
     ports:
     - protocol: TCP
       port: {{ .Values.services.jokeGateway.service.port }}
