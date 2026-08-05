@@ -23,8 +23,9 @@ services:
       repository: seminar/joke-gateway
       tag: v1
     service:
-      type: ClusterIP
+      type: NodePort
       port: 8080
+      nodePort: 30080
     resources:
       requests:
         cpu: 250m
@@ -236,9 +237,10 @@ cnpg:
 
 # Ingress configuration (uses the Gateway API, since the cluster's Cilium
 # install is configured as a Gateway controller rather than a classic Ingress
-# controller)
+# controller). Disabled by default in favor of exposing joke-gateway directly
+# via a NodePort service (see services.jokeGateway.service above).
 ingress:
-  enabled: true
+  enabled: false
   gatewayClassName: cilium
   hostname: jokes.container.it-scholar.com
   # The cluster's Cilium install has enable-gateway-api-proxy-protocol=true,

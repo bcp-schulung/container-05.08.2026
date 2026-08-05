@@ -14,6 +14,9 @@ spec:
     targetPort: http
     protocol: TCP
     name: http
+    {{- if and (eq $svc.service.type "NodePort") $svc.service.nodePort }}
+    nodePort: {{ $svc.service.nodePort }}
+    {{- end }}
   selector:
     {{- include "joke-platform.serviceSelectorLabels" (list $svc) | nindent 4 }}
 {{- end }}

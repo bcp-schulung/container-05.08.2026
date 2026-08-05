@@ -41,6 +41,14 @@ To access the Joke Platform:
 1. Via Ingress (HTTPS):
    https://{{ .Values.ingress.hostname }}
 
+{{- else if eq .Values.services.jokeGateway.service.type "NodePort" }}
+
+1. Via NodePort, using any cluster node's external IP:
+   http://<node-ip>:{{ .Values.services.jokeGateway.service.nodePort }}
+
+   Node IPs:
+     kubectl get nodes -o wide
+
 {{- else }}
 
 1. Port forward to the gateway service:
